@@ -1,0 +1,9 @@
+playwright>=1.35.0
+beautifulsoup4
+lxml
+httpx
+aiofiles
+aiosqlite
+PyYAML
+pandas
+tqdm

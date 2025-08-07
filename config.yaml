@@ -1,0 +1,26 @@
+start_urls:
+  - "https://news.ycombinator.com"
+  - "https://arxiv.org"
+max_depth: 2
+concurrency: 2
+user_agent: "Mozilla/5.0 (X11; Linux x86_64) CoineyScraper/1.0"
+output:
+  jsonl: "./exports/dataset.jsonl"
+  sqlite: "./exports/dataset.db"
+crawl:
+  follow_external: false
+  respect_robots: true
+  wait_after_load: 1.0
+  intercept_api: true
+rate_limit:
+  delay_seconds: 0.5
+github:
+  token: ""                # optional, recommended for higher rate limits
+  query: "language:python machine learning"
+  per_page: 10
+  pages: 2
+  max_files_per_repo: 200
+  extensions: [".py", ".js", ".cpp", ".c", ".java", ".rs"]
+  max_file_size: 200000   # bytes
+  concurrency: 8
+  output_dir: "exports/github_code"
