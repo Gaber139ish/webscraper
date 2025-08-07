@@ -1,0 +1,12 @@
+__pycache__/
+.vscode/
+.env
+*.pyc
+exports/
+*.db
+*.sqlite
+node_modules/
+.venv/
+playwright/
+
+
