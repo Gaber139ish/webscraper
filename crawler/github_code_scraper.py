@@ -5,6 +5,7 @@ import time
 import base64
 import json
 from pathlib import Path
+from typing import Optional, Dict, Any
 
 DEFAULT_EXTENSIONS = [
     ".py", ".js", ".ts", ".java", ".cpp", ".c", ".h", ".cs",
@@ -13,12 +14,14 @@ DEFAULT_EXTENSIONS = [
 ]
 
 class GitHubCodeScraper:
-    def __init__(self, token=None, output_dir="exports/github_code", 
-                 extensions=None, max_file_size=200_000, concurrency=6):
+    def __init__(self, token: Optional[str] = None, output_dir: str = "exports/github_code", 
+                 extensions=None, max_file_size: int = 200_000, concurrency: int = 6,
+                 proxies: Optional[Dict[str, Any]] = None):
         """
         max_file_size: bytes (default 200 KB)
         extensions: list of extensions to keep; None -> DEFAULT_EXTENSIONS
         concurrency: number of simultaneous downloads
+        proxies: httpx proxies mapping
         """
         self.token = token or os.getenv("GITHUB_TOKEN")
         self.base_api = "https://api.github.com"
@@ -33,9 +36,10 @@ class GitHubCodeScraper:
         self.extensions = set(extensions or DEFAULT_EXTENSIONS)
         self.max_file_size = max_file_size
         self.semaphore = asyncio.Semaphore(concurrency)
+        self.proxies = proxies
 
     async def _get_json(self, url, params=None):
-        async with httpx.AsyncClient(headers=self.headers, timeout=30.0) as client:
+        async with httpx.AsyncClient(headers=self.headers, timeout=30.0, proxies=self.proxies) as client:
             r = await client.get(url, params=params)
             if r.status_code == 403 and "X-RateLimit-Reset" in r.headers:
                 reset_time = int(r.headers["X-RateLimit-Reset"])
@@ -47,7 +51,7 @@ class GitHubCodeScraper:
             return r.json()
 
     async def _get_text(self, url):
-        async with httpx.AsyncClient(headers=self.headers, timeout=60.0) as client:
+        async with httpx.AsyncClient(headers=self.headers, timeout=60.0, proxies=self.proxies) as client:
             r = await client.get(url)
             if r.status_code == 403 and "X-RateLimit-Reset" in r.headers:
                 reset_time = int(r.headers["X-RateLimit-Reset"])

@@ -1,11 +1,13 @@
 import asyncio
 import time
+import random
 from urllib.parse import urljoin, urldefrag, urlparse
 from crawler.browser_driver import BrowserDriver
 from crawler.api_sniffer import attach_sniffer
 from parser.html_parser import parse_html
 from pipeline.cleaner import normalize_parsed
 from crawler.robots import RobotsCache
+from crawler.rate_limiter import DomainRateLimiter
 
 async def run_crawl(cfg, json_writer, sqlite_store):
     start_urls = cfg.get("start_urls", [])
@@ -17,13 +19,43 @@ async def run_crawl(cfg, json_writer, sqlite_store):
     for url in start_urls:
         await queue.put((url, 0))
 
-    visited = set()
-    robots = RobotsCache(user_agent=cfg.get("user_agent")) if cfg.get("crawl", {}).get("respect_robots", False) else None
+    visited_mem = set()
 
-    async with BrowserDriver(user_agent=cfg.get("user_agent"), headless=True) as drv:
-        async def worker(name: str):
-            ctx = await drv.new_context()
-            # optional per-page sniffer
+    # rate limiter
+    rl_cfg = cfg.get("rate_limit", {})
+    rate_limiter = DomainRateLimiter(
+        default_delay_seconds=float(rl_cfg.get("delay_seconds", 0.5)),
+        domain_overrides=rl_cfg.get("per_domain_delays", {})
+    )
+
+    # proxies and UAs
+    proxy_list = cfg.get("proxies", {}).get("playwright", []) or []
+    ua_list = cfg.get("user_agents", []) or ([cfg.get("user_agent")] if cfg.get("user_agent") else [])
+
+    # robots
+    robots = RobotsCache(
+        user_agent=(cfg.get("user_agent") or (ua_list[0] if ua_list else "*")),
+        proxies=cfg.get("proxies", {}).get("httpx")
+    ) if cfg.get("crawl", {}).get("respect_robots", False) else None
+
+    async def get_next_proxy():
+        if not proxy_list:
+            return None
+        # simple round-robin
+        proxy = proxy_list.pop(0)
+        proxy_list.append(proxy)
+        return proxy
+
+    def pick_user_agent():
+        if not ua_list:
+            return None
+        return random.choice(ua_list)
+
+    async def worker(name: str):
+        proxy = await get_next_proxy()
+        ua = pick_user_agent()
+        async with BrowserDriver(user_agent=ua, headless=True, proxy=proxy) as drv:
+            ctx = await drv.new_context(user_agent=ua)
             page = await ctx.new_page()
             api_hits = []
 
@@ -35,17 +67,27 @@ async def run_crawl(cfg, json_writer, sqlite_store):
 
             try:
                 while True:
-                    url, depth = await queue.get()
+                    item = await queue.get()
+                    url, depth = item
                     if url is None:
                         queue.task_done()
                         break
 
-                    if (url in visited) or (depth > cfg.get("max_depth", 2)):
+                    if (url in visited_mem) or (depth > cfg.get("max_depth", 2)):
                         queue.task_done()
                         continue
-                    visited.add(url)
+
+                    # persisted visited check
+                    if await sqlite_store.has_url(url):
+                        visited_mem.add(url)
+                        queue.task_done()
+                        continue
+
+                    visited_mem.add(url)
 
                     try:
+                        # rate limit by domain
+                        await rate_limiter.wait_for_slot(url)
                         await page.goto(url, wait_until="networkidle")
                         await asyncio.sleep(cfg.get("crawl", {}).get("wait_after_load", 1.0))
                         html = await page.content()
@@ -55,21 +97,21 @@ async def run_crawl(cfg, json_writer, sqlite_store):
                             "url": url,
                             "depth": depth,
                             "timestamp": int(time.time()),
-                            "api_hits": api_hits.copy()
+                            "api_hits": api_hits.copy(),
+                            "user_agent": ua,
+                            "proxy": proxy
                         }
 
                         parsed = normalize_parsed(parsed)
                         await json_writer.write(parsed)
                         await sqlite_store.insert(parsed)
 
-                        # enqueue new links
                         for link in parsed.get("links", []):
                             normalized = normalize_url(link, url)
                             if normalized and should_follow(normalized, cfg, url, robots):
                                 await queue.put((normalized, depth + 1))
 
                         api_hits.clear()
-                        await asyncio.sleep(cfg.get("rate_limit", {}).get("delay_seconds", 0.5))
                     except Exception as e:
                         print("crawl error", url, e)
                     finally:
@@ -77,13 +119,11 @@ async def run_crawl(cfg, json_writer, sqlite_store):
             finally:
                 await ctx.close()
 
-        workers = [asyncio.create_task(worker(f"w{i}")) for i in range(concurrency)]
-        # Wait for all enqueued tasks to complete
-        await queue.join()
-        # signal workers to exit
-        for _ in range(concurrency):
-            await queue.put((None, None))
-        await asyncio.gather(*workers, return_exceptions=True)
+    workers = [asyncio.create_task(worker(f"w{i}")) for i in range(concurrency)]
+    await queue.join()
+    for _ in range(concurrency):
+        await queue.put((None, None))
+    await asyncio.gather(*workers, return_exceptions=True)
 
 def normalize_url(href, base):
     try:
@@ -97,12 +137,10 @@ def normalize_url(href, base):
         return None
 
 def should_follow(url, cfg, base_url, robots=None):
-    # same-domain constraint if configured
     if not cfg.get("crawl", {}).get("follow_external", False):
         base_dom = urlparse(base_url).netloc
         if urlparse(url).netloc != base_dom:
             return False
-    # robots.txt check
     if robots is not None:
         try:
             if not robots.is_allowed(url):

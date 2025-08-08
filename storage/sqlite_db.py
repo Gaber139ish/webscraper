@@ -42,6 +42,15 @@ class SQLiteStore:
         except Exception as e:
             print("sqlite insert error:", e)
 
+    async def has_url(self, url: str) -> bool:
+        try:
+            async with self.db.execute("SELECT 1 FROM pages WHERE url = ? LIMIT 1", (url,)) as cursor:
+                row = await cursor.fetchone()
+                return row is not None
+        except Exception as e:
+            print("sqlite has_url error:", e)
+            return False
+
     async def close(self):
         if self.db is not None:
             await self.db.close()

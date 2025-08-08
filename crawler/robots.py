@@ -1,12 +1,13 @@
 import asyncio
 import httpx
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 from urllib.parse import urlparse, urljoin
 from urllib import robotparser
 
 class RobotsCache:
-    def __init__(self, user_agent: Optional[str] = None):
+    def __init__(self, user_agent: Optional[str] = None, proxies: Optional[Dict[str, Any]] = None):
         self.user_agent = user_agent or "*"
+        self.proxies = proxies
         self._host_to_parser: Dict[str, robotparser.RobotFileParser] = {}
         self._lock = asyncio.Lock()
 
@@ -15,7 +16,7 @@ class RobotsCache:
         robots_url = urljoin(f"{parsed.scheme}://{parsed.netloc}", "/robots.txt")
         rp = robotparser.RobotFileParser()
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=10.0, proxies=self.proxies) as client:
                 r = await client.get(robots_url)
                 if r.status_code >= 400:
                     # treat missing/denied as allow by default

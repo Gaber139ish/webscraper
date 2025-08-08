@@ -8,6 +8,7 @@ from crawler.frontend_scraper import run_crawl
 from storage.json_saver import JSONLWriter
 from storage.sqlite_db import SQLiteStore
 from crawler.github_code_scraper import GitHubCodeScraper
+from dataset.builder import build_datasets
 
 CONFIG_PATH = "config.yaml"
 
@@ -16,12 +17,14 @@ async def run_github_mode(cfg, json_writer, sqlite_store):
     if not gh_cfg:
         return
     token = gh_cfg.get("token")
+    proxies = cfg.get("proxies", {}).get("httpx")
     gh_scraper = GitHubCodeScraper(
         token=token,
         output_dir=gh_cfg.get("output_dir", "exports/github_code"),
         extensions=gh_cfg.get("extensions"),
         max_file_size=gh_cfg.get("max_file_size", 200_000),
-        concurrency=gh_cfg.get("concurrency", 6)
+        concurrency=gh_cfg.get("concurrency", 6),
+        proxies=proxies
     )
 
     repos = await gh_scraper.search_repos(
@@ -51,6 +54,7 @@ async def main():
     parser = argparse.ArgumentParser(description="Coiney Scraper CLI")
     parser.add_argument("--config", default=CONFIG_PATH, help="Path to config.yaml")
     parser.add_argument("--mode", choices=["crawl", "github", "both"], default="both", help="Which pipeline to run")
+    parser.add_argument("--build-datasets", action="store_true", help="Build training datasets after scraping")
     args = parser.parse_args()
 
     with open(args.config, "r") as f:
@@ -67,6 +71,8 @@ async def main():
             await run_crawl(cfg, json_writer, sqlite_store)
         if args.mode in ("github", "both") and cfg.get("github"):
             await run_github_mode(cfg, json_writer, sqlite_store)
+        if args.build_datasets:
+            build_datasets(cfg)
     finally:
         await sqlite_store.close()
 
