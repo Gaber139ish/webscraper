@@ -19,6 +19,10 @@ class SQLiteStore:
             scrape_meta TEXT
         )
         """)
+        # Add a helpful index for domain queries
+        await self.db.execute("""
+        CREATE INDEX IF NOT EXISTS idx_pages_domain ON pages(domain)
+        """)
         await self.db.commit()
 
     async def insert(self, parsed):
@@ -37,3 +41,8 @@ class SQLiteStore:
             await self.db.commit()
         except Exception as e:
             print("sqlite insert error:", e)
+
+    async def close(self):
+        if self.db is not None:
+            await self.db.close()
+            self.db = None
