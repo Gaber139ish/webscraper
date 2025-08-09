@@ -25,7 +25,10 @@ async def run_crawl(cfg: Dict[str, Any], json_writer, sqlite_store) -> None:
     visited: Set[str] = set()
     robots = RobotsCache(user_agent=cfg.get("user_agent")) if cfg.get("crawl", {}).get("respect_robots", False) else None
 
-    async with BrowserDriver(user_agent=cfg.get("user_agent"), headless=True) as drv:
+    headless: bool = bool(cfg.get("headless", True))
+    proxy = cfg.get("proxy")  # expects dict like {"server": "http://host:port", "username": "", "password": ""}
+
+    async with BrowserDriver(user_agent=cfg.get("user_agent"), headless=headless, proxy=proxy) as drv:
         async def worker(name: str) -> None:
             ctx = await drv.new_context()
             page = await ctx.new_page()
@@ -36,6 +39,9 @@ async def run_crawl(cfg: Dict[str, Any], json_writer, sqlite_store) -> None:
 
             if cfg.get("crawl", {}).get("intercept_api", True):
                 await attach_sniffer(page, on_api)
+
+            max_retries: int = int(cfg.get("crawl", {}).get("max_retries", 2))
+            backoff_base: float = float(cfg.get("crawl", {}).get("backoff_base", 0.75))
 
             try:
                 while True:
@@ -51,7 +57,19 @@ async def run_crawl(cfg: Dict[str, Any], json_writer, sqlite_store) -> None:
 
                     try:
                         logger.info(f"[{name}] Visiting {url} (depth={depth})")
-                        await page.goto(url, wait_until="networkidle")
+                        attempt = 0
+                        while True:
+                            try:
+                                await page.goto(url, wait_until="networkidle")
+                                break
+                            except Exception as nav_err:
+                                if attempt >= max_retries:
+                                    raise nav_err
+                                sleep_s = backoff_base * (2 ** attempt)
+                                logger.warning(f"[{name}] goto failed (attempt {attempt+1}/{max_retries+1}): {nav_err}; retrying in {sleep_s:.2f}s")
+                                await asyncio.sleep(sleep_s)
+                                attempt += 1
+
                         await asyncio.sleep(cfg.get("crawl", {}).get("wait_after_load", 1.0))
                         html = await page.content()
                         parsed = parse_html(url, html)
@@ -60,7 +78,8 @@ async def run_crawl(cfg: Dict[str, Any], json_writer, sqlite_store) -> None:
                             "url": url,
                             "depth": depth,
                             "timestamp": int(time.time()),
-                            "api_hits": api_hits.copy()
+                            "api_hits": api_hits.copy(),
+                            "schema_version": "1.0"
                         }
 
                         parsed = normalize_parsed(parsed)

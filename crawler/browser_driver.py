@@ -1,15 +1,20 @@
 from playwright.async_api import async_playwright
+from typing import Optional, Dict, Any
 
 class BrowserDriver:
-    def __init__(self, user_agent=None, headless=True):
+    def __init__(self, user_agent: Optional[str] = None, headless: bool = True, proxy: Optional[Dict[str, Any]] = None):
         self.user_agent = user_agent
         self.headless = headless
+        self.proxy = proxy
         self.playwright = None
         self.browser = None
 
     async def __aenter__(self):
         self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(headless=self.headless)
+        launch_kwargs = {"headless": self.headless}
+        if self.proxy:
+            launch_kwargs["proxy"] = self.proxy
+        self.browser = await self.playwright.chromium.launch(**launch_kwargs)
         return self
 
     async def new_context(self):

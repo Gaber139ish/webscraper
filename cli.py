@@ -54,10 +54,15 @@ async def main():
     parser = argparse.ArgumentParser(description="Coiney Scraper CLI")
     parser.add_argument("--config", default=CONFIG_PATH, help="Path to config.yaml")
     parser.add_argument("--mode", choices=["crawl", "github", "both"], default="both", help="Which pipeline to run")
+    parser.add_argument("--headless", dest="headless", action="store_true", default=True, help="Run browser headless (default)")
+    parser.add_argument("--no-headless", dest="headless", action="store_false", help="Run browser with UI")
     args = parser.parse_args()
 
     with open(args.config, "r") as f:
         cfg = yaml.safe_load(f)
+
+    # CLI overrides
+    cfg["headless"] = args.headless
 
     os.makedirs("exports", exist_ok=True)
 

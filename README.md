@@ -17,12 +17,16 @@ Configuration (`config.yaml`):
 - **max_depth**: crawl depth (default 2)
 - **concurrency**: number of crawler workers (default 2)
 - **user_agent**: UA string sent by the browser
+- **headless**: run browser headless (default true). You can override via CLI `--no-headless`.
+- **proxy**: optional Playwright proxy dict, e.g. `{ server: "http://host:port", username: "", password: "" }`
 - **output.jsonl**: path to JSONL dataset
 - **output.sqlite**: path to SQLite database
 - **crawl.follow_external**: follow links to other domains (default false)
 - **crawl.respect_robots**: respect robots.txt (default true)
 - **crawl.wait_after_load**: seconds to wait after page load (default 1.0)
 - **crawl.intercept_api**: capture XHR/fetch and GraphQL responses (default true)
+- **crawl.max_retries**: navigation retries on failures (default 2)
+- **crawl.backoff_base**: base seconds for exponential backoff (default 0.75)
 - **rate_limit.delay_seconds**: delay between page visits per worker
 - **github**: optional GitHub code scraping config. You can also set `GITHUB_TOKEN` env var.
 

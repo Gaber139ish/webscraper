@@ -4,6 +4,8 @@ start_urls:
 max_depth: 2
 concurrency: 2
 user_agent: "Mozilla/5.0 (X11; Linux x86_64) CoineyScraper/1.0"
+headless: true
+# proxy: { server: "http://host:port", username: "user", password: "pass" }
 output:
   jsonl: "./exports/dataset.jsonl"
   sqlite: "./exports/dataset.db"
@@ -12,6 +14,8 @@ crawl:
   respect_robots: true
   wait_after_load: 1.0
   intercept_api: true
+  max_retries: 2
+  backoff_base: 0.75
 rate_limit:
   delay_seconds: 0.5
 github:
