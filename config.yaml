@@ -4,10 +4,12 @@ start_urls:
 max_depth: 2
 concurrency: 2
 user_agent: "Mozilla/5.0 (X11; Linux x86_64) CoineyScraper/1.0"
-user_agents: []  # optional rotation list; if empty, uses user_agent above
+user_agents: []
+allow_list: []    # optional: list of domains/regexes to include
+deny_list: []     # optional: list of domains/regexes to exclude
 proxies:
-  playwright: []  # e.g., ["http://user:pass@host:port", "socks5://host:port"]
-  httpx: null     # e.g., {"http": "http://host:port", "https": "http://host:port"}
+  playwright: []
+  httpx: null
 output:
   jsonl: "./exports/dataset.jsonl"
   sqlite: "./exports/dataset.db"
@@ -16,17 +18,18 @@ crawl:
   respect_robots: true
   wait_after_load: 1.0
   intercept_api: true
+  stealth: true
 rate_limit:
   delay_seconds: 0.5
   per_domain_delays: {}
 github:
-  token: ""                # optional, recommended for higher rate limits
+  token: ""
   query: "language:python machine learning"
   per_page: 10
   pages: 2
   max_files_per_repo: 200
   extensions: [".py", ".js", ".cpp", ".c", ".java", ".rs"]
-  max_file_size: 200000   # bytes
+  max_file_size: 200000
   concurrency: 8
   output_dir: "exports/github_code"
 datasets:
@@ -35,3 +38,7 @@ datasets:
   code_dataset_name: "code_text"
   val_ratio: 0.05
   min_text_length: 200
+  languages_allowed: ["en"]
+  chunk_tokens: 800
+  chunk_tokens_code: 1200
+  licenses_allowed: ["mit", "apache-2.0", "bsd-3-clause", "bsd-2-clause", "mpl-2.0"]

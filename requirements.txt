@@ -6,3 +6,12 @@ aiofiles
 aiosqlite
 PyYAML
 pandas
+trafilatura
+langid
+datasketch
+tiktoken
+pyarrow
+duckdb
+prometheus_client
+feedparser
+playwright-stealth

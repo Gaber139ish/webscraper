@@ -19,7 +19,6 @@ class RobotsCache:
             async with httpx.AsyncClient(timeout=10.0, proxies=self.proxies) as client:
                 r = await client.get(robots_url)
                 if r.status_code >= 400:
-                    # treat missing/denied as allow by default
                     rp.parse([])
                 else:
                     rp.parse(r.text.splitlines())
@@ -37,10 +36,18 @@ class RobotsCache:
             return rp
 
     def is_allowed(self, url: str) -> bool:
-        # fire-and-forget populate; fallback allow until loaded
         parser = self._host_to_parser.get(urlparse(url).netloc)
         if parser is None:
-            # Kick off background populate without blocking
             asyncio.create_task(self._get_parser(url))
             return True
         return parser.can_fetch(self.user_agent, url)
+
+    def crawl_delay(self, url: str) -> Optional[float]:
+        parser = self._host_to_parser.get(urlparse(url).netloc)
+        if parser is None:
+            asyncio.create_task(self._get_parser(url))
+            return None
+        try:
+            return parser.crawl_delay(self.user_agent)
+        except Exception:
+            return None

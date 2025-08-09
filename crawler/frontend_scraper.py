@@ -8,6 +8,12 @@ from parser.html_parser import parse_html
 from pipeline.cleaner import normalize_parsed
 from crawler.robots import RobotsCache
 from crawler.rate_limiter import DomainRateLimiter
+from prom.metrics import PAGES_CRAWLED, PAGES_SKIPPED, CRAWL_ERRORS, API_HITS
+
+try:
+    from playwright_stealth import stealth_async
+except Exception:
+    stealth_async = None
 
 async def run_crawl(cfg, json_writer, sqlite_store):
     start_urls = cfg.get("start_urls", [])
@@ -21,18 +27,15 @@ async def run_crawl(cfg, json_writer, sqlite_store):
 
     visited_mem = set()
 
-    # rate limiter
     rl_cfg = cfg.get("rate_limit", {})
     rate_limiter = DomainRateLimiter(
         default_delay_seconds=float(rl_cfg.get("delay_seconds", 0.5)),
         domain_overrides=rl_cfg.get("per_domain_delays", {})
     )
 
-    # proxies and UAs
     proxy_list = cfg.get("proxies", {}).get("playwright", []) or []
     ua_list = cfg.get("user_agents", []) or ([cfg.get("user_agent")] if cfg.get("user_agent") else [])
 
-    # robots
     robots = RobotsCache(
         user_agent=(cfg.get("user_agent") or (ua_list[0] if ua_list else "*")),
         proxies=cfg.get("proxies", {}).get("httpx")
@@ -41,7 +44,6 @@ async def run_crawl(cfg, json_writer, sqlite_store):
     async def get_next_proxy():
         if not proxy_list:
             return None
-        # simple round-robin
         proxy = proxy_list.pop(0)
         proxy_list.append(proxy)
         return proxy
@@ -57,9 +59,16 @@ async def run_crawl(cfg, json_writer, sqlite_store):
         async with BrowserDriver(user_agent=ua, headless=True, proxy=proxy) as drv:
             ctx = await drv.new_context(user_agent=ua)
             page = await ctx.new_page()
+            if stealth_async is not None and cfg.get("crawl", {}).get("stealth", True):
+                try:
+                    await stealth_async(page)
+                except Exception:
+                    pass
+
             api_hits = []
 
             async def on_api(data):
+                API_HITS.inc()
                 api_hits.append(data)
 
             if cfg.get("crawl", {}).get("intercept_api", True):
@@ -74,24 +83,36 @@ async def run_crawl(cfg, json_writer, sqlite_store):
                         break
 
                     if (url in visited_mem) or (depth > cfg.get("max_depth", 2)):
+                        PAGES_SKIPPED.inc()
                         queue.task_done()
                         continue
 
-                    # persisted visited check
                     if await sqlite_store.has_url(url):
                         visited_mem.add(url)
+                        PAGES_SKIPPED.inc()
                         queue.task_done()
                         continue
 
                     visited_mem.add(url)
 
                     try:
-                        # rate limit by domain
                         await rate_limiter.wait_for_slot(url)
-                        await page.goto(url, wait_until="networkidle")
+                        # robots crawl-delay augmentation
+                        if robots is not None:
+                            delay = robots.crawl_delay(url)
+                            if delay:
+                                await asyncio.sleep(float(delay))
+                        # request
+                        resp = await page.goto(url, wait_until="networkidle")
                         await asyncio.sleep(cfg.get("crawl", {}).get("wait_after_load", 1.0))
                         html = await page.content()
                         parsed = parse_html(url, html)
+
+                        # headers for ETag/Last-Modified if available
+                        try:
+                            headers = dict(resp.headers) if resp else {}
+                        except Exception:
+                            headers = {}
 
                         parsed['scrape_meta'] = {
                             "url": url,
@@ -99,12 +120,15 @@ async def run_crawl(cfg, json_writer, sqlite_store):
                             "timestamp": int(time.time()),
                             "api_hits": api_hits.copy(),
                             "user_agent": ua,
-                            "proxy": proxy
+                            "proxy": proxy,
+                            "etag": headers.get("etag"),
+                            "last_modified": headers.get("last-modified"),
                         }
 
                         parsed = normalize_parsed(parsed)
                         await json_writer.write(parsed)
                         await sqlite_store.insert(parsed)
+                        PAGES_CRAWLED.inc()
 
                         for link in parsed.get("links", []):
                             normalized = normalize_url(link, url)
@@ -113,6 +137,7 @@ async def run_crawl(cfg, json_writer, sqlite_store):
 
                         api_hits.clear()
                     except Exception as e:
+                        CRAWL_ERRORS.inc()
                         print("crawl error", url, e)
                     finally:
                         queue.task_done()
