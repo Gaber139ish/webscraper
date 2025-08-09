@@ -1,50 +1,56 @@
 import asyncio
-import re
 import time
 from urllib.parse import urljoin, urldefrag, urlparse
 from crawler.browser_driver import BrowserDriver
 from crawler.api_sniffer import attach_sniffer
 from parser.html_parser import parse_html
-from aiofiles import open as aioopen
-from tqdm.asyncio import tqdm
-
-visited = set()
+from pipeline.cleaner import normalize_parsed
+from crawler.robots import RobotsCache
 
 async def run_crawl(cfg, json_writer, sqlite_store):
-    start = cfg.get("start_urls", [])
+    start_urls = cfg.get("start_urls", [])
+    if not start_urls:
+        return
+
     concurrency = cfg.get("concurrency", 2)
-    sem = asyncio.Semaphore(concurrency)
     queue = asyncio.Queue()
-    for u in start:
-        await queue.put((u, 0))
+    for url in start_urls:
+        await queue.put((url, 0))
+
+    visited = set()
+    robots = RobotsCache(user_agent=cfg.get("user_agent")) if cfg.get("crawl", {}).get("respect_robots", False) else None
 
     async with BrowserDriver(user_agent=cfg.get("user_agent"), headless=True) as drv:
-        contexts = []
-        # We'll create one browser context per worker to isolate storage
-        async def worker(name):
-            async with sem:
-                ctx = await drv.new_context()
-                page = await ctx.new_page()
-                api_hits = []
+        async def worker(name: str):
+            ctx = await drv.new_context()
+            # optional per-page sniffer
+            page = await ctx.new_page()
+            api_hits = []
 
-                async def on_api(data):
-                    api_hits.append(data)
+            async def on_api(data):
+                api_hits.append(data)
 
+            if cfg.get("crawl", {}).get("intercept_api", True):
                 await attach_sniffer(page, on_api)
 
-                while not queue.empty():
+            try:
+                while True:
                     url, depth = await queue.get()
-                    if url in visited or depth > cfg.get("max_depth", 2):
+                    if url is None:
+                        queue.task_done()
+                        break
+
+                    if (url in visited) or (depth > cfg.get("max_depth", 2)):
                         queue.task_done()
                         continue
                     visited.add(url)
+
                     try:
                         await page.goto(url, wait_until="networkidle")
                         await asyncio.sleep(cfg.get("crawl", {}).get("wait_after_load", 1.0))
                         html = await page.content()
                         parsed = parse_html(url, html)
 
-                        # combine with api hits and save
                         parsed['scrape_meta'] = {
                             "url": url,
                             "depth": depth,
@@ -52,26 +58,31 @@ async def run_crawl(cfg, json_writer, sqlite_store):
                             "api_hits": api_hits.copy()
                         }
 
+                        parsed = normalize_parsed(parsed)
                         await json_writer.write(parsed)
                         await sqlite_store.insert(parsed)
 
                         # enqueue new links
                         for link in parsed.get("links", []):
                             normalized = normalize_url(link, url)
-                            if normalized and should_follow(normalized, cfg, url):
-                                await queue.put((normalized, depth+1))
+                            if normalized and should_follow(normalized, cfg, url, robots):
+                                await queue.put((normalized, depth + 1))
+
                         api_hits.clear()
                         await asyncio.sleep(cfg.get("rate_limit", {}).get("delay_seconds", 0.5))
                     except Exception as e:
                         print("crawl error", url, e)
-                    queue.task_done()
+                    finally:
+                        queue.task_done()
+            finally:
                 await ctx.close()
 
-        # Launch workers
         workers = [asyncio.create_task(worker(f"w{i}")) for i in range(concurrency)]
+        # Wait for all enqueued tasks to complete
         await queue.join()
-        for w in workers:
-            w.cancel()
+        # signal workers to exit
+        for _ in range(concurrency):
+            await queue.put((None, None))
         await asyncio.gather(*workers, return_exceptions=True)
 
 def normalize_url(href, base):
@@ -82,12 +93,20 @@ def normalize_url(href, base):
         joined = urljoin(base, href)
         clean, _ = urldefrag(joined)
         return clean
-    except:
+    except Exception:
         return None
 
-def should_follow(url, cfg, base_url):
+def should_follow(url, cfg, base_url, robots=None):
+    # same-domain constraint if configured
     if not cfg.get("crawl", {}).get("follow_external", False):
         base_dom = urlparse(base_url).netloc
         if urlparse(url).netloc != base_dom:
+            return False
+    # robots.txt check
+    if robots is not None:
+        try:
+            if not robots.is_allowed(url):
+                return False
+        except Exception:
             return False
     return True

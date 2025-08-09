@@ -6,4 +6,3 @@ aiofiles
 aiosqlite
 PyYAML
 pandas
-tqdm
