@@ -10,17 +10,20 @@ from crawler.robots import RobotsCache
 from utils.logger import get_logger
 from pathlib import Path
 
+
 logger = get_logger(__name__)
+
 
 async def infinite_scroll(page, max_iterations: int, wait_seconds: float) -> None:
     prev_height = -1
-    for i in range(max_iterations):
+    for _ in range(max_iterations):
         height = await page.evaluate("document.body.scrollHeight")
         if height == prev_height:
             break
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         await asyncio.sleep(wait_seconds)
         prev_height = height
+
 
 async def click_more(page, selectors: List[str], max_clicks: int, wait_seconds: float) -> None:
     clicks = 0
@@ -36,6 +39,7 @@ async def click_more(page, selectors: List[str], max_clicks: int, wait_seconds: 
             except Exception:
                 break
 
+
 async def seed_from_forms(cfg: Dict[str, Any], drv: BrowserDriver, queue: asyncio.Queue) -> None:
     forms_cfg = (cfg.get("deep_crawl", {}) or {}).get("forms") or []
     if not forms_cfg:
@@ -48,12 +52,15 @@ async def seed_from_forms(cfg: Dict[str, Any], drv: BrowserDriver, queue: asynci
             if not url:
                 continue
             await page.goto(url, wait_until="domcontentloaded")
+            # gather queries from inline list or file
             queries: List[str] = []
-            if action.get("queries"):
-                queries = list(action["queries"])  # type: ignore
-            elif action.get("queries_file"):
+            q_inline = action.get("queries")
+            q_file = action.get("queries_file")
+            if isinstance(q_inline, list):
+                queries = [str(x) for x in q_inline]
+            elif isinstance(q_file, str):
                 try:
-                    with open(action["queries_file"], "r", encoding="utf-8") as f:
+                    with open(q_file, "r", encoding="utf-8") as f:
                         queries = [line.strip() for line in f if line.strip()]
                 except Exception as e:
                     logger.warning(f"Failed to read queries_file: {e}")
@@ -66,7 +73,6 @@ async def seed_from_forms(cfg: Dict[str, Any], drv: BrowserDriver, queue: asynci
             max_results_per_query: int = int(action.get("max_results_per_query", 20))
 
             for q in queries:
-                # fill fields (supports {query} placeholder)
                 for selector, value in fields.items():
                     v = value.replace("{query}", q)
                     try:
@@ -84,7 +90,6 @@ async def seed_from_forms(cfg: Dict[str, Any], drv: BrowserDriver, queue: asynci
                 await asyncio.sleep(wait_after_submit)
                 html = await page.content()
                 parsed = parse_html(page.url, html)
-                # enqueue top results links
                 count = 0
                 for link in parsed.get("links", []):
                     normalized = normalize_url(link, page.url)
@@ -96,6 +101,7 @@ async def seed_from_forms(cfg: Dict[str, Any], drv: BrowserDriver, queue: asynci
         except Exception as e:
             logger.warning(f"form seed error: {e}")
     await ctx.close()
+
 
 async def run_crawl(cfg: Dict[str, Any], json_writer, sqlite_store) -> None:
     start_urls = cfg.get("start_urls", [])
@@ -109,17 +115,36 @@ async def run_crawl(cfg: Dict[str, Any], json_writer, sqlite_store) -> None:
         await queue.put((url, 0))
 
     visited: Set[str] = set()
-    robots = RobotsCache(user_agent=cfg.get("user_agent")) if cfg.get("crawl", {}).get("respect_robots", False) else None
+    respect_robots = cfg.get("crawl", {}).get("respect_robots", False)
+    robots = RobotsCache(user_agent=cfg.get("user_agent")) if respect_robots else None
 
     headless: bool = bool(cfg.get("headless", True))
     proxy = cfg.get("proxy")
 
     allow_domains = set(cfg.get("crawl", {}).get("allow_domains", []) or [])
     deny_domains = set(cfg.get("crawl", {}).get("deny_domains", []) or [])
-    deny_extensions = set(cfg.get("crawl", {}).get("deny_extensions", [
-        ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico",
-        ".pdf", ".zip", ".gz", ".tar", ".rar", ".7z", ".mp3", ".mp4"
-    ]))
+    deny_extensions = set(
+        cfg.get("crawl", {}).get(
+            "deny_extensions",
+            [
+                ".jpg",
+                ".jpeg",
+                ".png",
+                ".gif",
+                ".svg",
+                ".webp",
+                ".ico",
+                ".pdf",
+                ".zip",
+                ".gz",
+                ".tar",
+                ".rar",
+                ".7z",
+                ".mp3",
+                ".mp4",
+            ],
+        )
+    )
 
     per_domain_delay = float(cfg.get("rate_limit", {}).get("per_domain_delay_seconds", 0))
     per_domain_concurrency = int(cfg.get("rate_limit", {}).get("per_domain_concurrency", 0))
@@ -165,7 +190,6 @@ async def run_crawl(cfg: Dict[str, Any], json_writer, sqlite_store) -> None:
             sem.release()
 
     async with BrowserDriver(user_agent=cfg.get("user_agent"), headless=headless, proxy=proxy) as drv:
-        # seed from configured forms before normal crawl
         await seed_from_forms(cfg, drv, queue)
 
         async def worker(name: str) -> None:
@@ -196,18 +220,18 @@ async def run_crawl(cfg: Dict[str, Any], json_writer, sqlite_store) -> None:
                     parsed_url = urlparse(url)
                     dom = parsed_url.netloc
                     if allow_domains and dom not in allow_domains:
-                        queue.task_done();
+                        queue.task_done()
                         continue
                     if dom in deny_domains:
-                        queue.task_done();
+                        queue.task_done()
                         continue
+                    skip_due_to_ext = False
                     for ext in deny_extensions:
                         if parsed_url.path.lower().endswith(ext):
-                            queue.task_done();
+                            queue.task_done()
+                            skip_due_to_ext = True
                             break
-                    else:
-                        pass
-                    if queue._unfinished_tasks and parsed_url.path.lower().endswith(tuple(deny_extensions)):
+                    if skip_due_to_ext:
                         continue
 
                     visited.add(url)
@@ -224,17 +248,28 @@ async def run_crawl(cfg: Dict[str, Any], json_writer, sqlite_store) -> None:
                                 if attempt >= max_retries:
                                     raise nav_err
                                 sleep_s = backoff_base * (2 ** attempt)
-                                logger.warning(f"[{name}] goto failed (attempt {attempt+1}/{max_retries+1}): {nav_err}; retrying in {sleep_s:.2f}s")
+                                logger.warning(
+                                    f"[{name}] goto failed (attempt {attempt + 1}/{max_retries + 1}): {nav_err}; "
+                                    f"retrying in {sleep_s:.2f}s",
+                                )
                                 await asyncio.sleep(sleep_s)
                                 attempt += 1
 
                         await asyncio.sleep(cfg.get("crawl", {}).get("wait_after_load", 1.0))
 
-                        # deep crawl helpers
                         if infinite_cfg.get("enabled", False):
-                            await infinite_scroll(page, int(infinite_cfg.get("max_iterations", 8)), float(infinite_cfg.get("wait_seconds", 0.8)))
+                            await infinite_scroll(
+                                page,
+                                int(infinite_cfg.get("max_iterations", 8)),
+                                float(infinite_cfg.get("wait_seconds", 0.8)),
+                            )
                         if click_more_selectors:
-                            await click_more(page, click_more_selectors, int(deep_cfg.get("max_clicks", 10)), float(deep_cfg.get("click_wait_seconds", 0.8)))
+                            await click_more(
+                                page,
+                                click_more_selectors,
+                                int(deep_cfg.get("max_clicks", 10)),
+                                float(deep_cfg.get("click_wait_seconds", 0.8)),
+                            )
 
                         html = await page.content()
                         parsed = parse_html(url, html)
@@ -244,7 +279,7 @@ async def run_crawl(cfg: Dict[str, Any], json_writer, sqlite_store) -> None:
                             "depth": depth,
                             "timestamp": int(time.time()),
                             "api_hits": api_hits.copy(),
-                            "schema_version": "1.0"
+                            "schema_version": "1.0",
                         }
 
                         parsed = normalize_parsed(parsed)
@@ -257,7 +292,10 @@ async def run_crawl(cfg: Dict[str, Any], json_writer, sqlite_store) -> None:
                             (snapshots_dir / f"{base_name}.html").write_text(html, encoding="utf-8")
                         if save_screenshot:
                             try:
-                                await page.screenshot(path=str(snapshots_dir / f"{base_name}.png"), full_page=True)
+                                await page.screenshot(
+                                    path=str(snapshots_dir / f"{base_name}.png"),
+                                    full_page=True,
+                                )
                             except Exception as ss_err:
                                 logger.debug(f"screenshot failed: {ss_err}")
 
@@ -282,6 +320,7 @@ async def run_crawl(cfg: Dict[str, Any], json_writer, sqlite_store) -> None:
             await queue.put((None, None))
         await asyncio.gather(*workers, return_exceptions=True)
 
+
 def normalize_url(href: str, base: str) -> Optional[str]:
     try:
         href = href.strip()
@@ -292,6 +331,7 @@ def normalize_url(href: str, base: str) -> Optional[str]:
         return clean
     except Exception:
         return None
+
 
 def should_follow(url: str, cfg: Dict[str, Any], base_url: str, robots: Optional[RobotsCache] = None) -> bool:
     if not cfg.get("crawl", {}).get("follow_external", False):

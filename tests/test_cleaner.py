@@ -1,4 +1,3 @@
-import pytest
 from pipeline.cleaner import clean_text, normalize_parsed
 
 

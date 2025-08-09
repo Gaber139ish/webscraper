@@ -5,20 +5,49 @@ import time
 import base64
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set
 from utils.logger import get_logger
 
 DEFAULT_EXTENSIONS = [
-    ".py", ".js", ".ts", ".java", ".cpp", ".c", ".h", ".cs",
-    ".go", ".rs", ".sh", ".rb", ".php", ".swift", ".kt", ".m",
-    ".scala", ".lua", ".r", ".jl", ".pl", ".sql", ".json", ".yaml", ".yml"
+    ".py",
+    ".js",
+    ".ts",
+    ".java",
+    ".cpp",
+    ".c",
+    ".h",
+    ".cs",
+    ".go",
+    ".rs",
+    ".sh",
+    ".rb",
+    ".php",
+    ".swift",
+    ".kt",
+    ".m",
+    ".scala",
+    ".lua",
+    ".r",
+    ".jl",
+    ".pl",
+    ".sql",
+    ".json",
+    ".yaml",
+    ".yml",
 ]
 
 logger = get_logger(__name__)
 
+
 class GitHubCodeScraper:
-    def __init__(self, token: Optional[str] = None, output_dir: str = "exports/github_code", 
-                 extensions: Optional[List[str]] = None, max_file_size: int = 200_000, concurrency: int = 6):
+    def __init__(
+        self,
+        token: Optional[str] = None,
+        output_dir: str = "exports/github_code",
+        extensions: Optional[List[str]] = None,
+        max_file_size: int = 200_000,
+        concurrency: int = 6,
+    ):
         """
         max_file_size: bytes (default 200 KB)
         extensions: list of extensions to keep; None -> DEFAULT_EXTENSIONS
@@ -26,9 +55,9 @@ class GitHubCodeScraper:
         """
         self.token = token or os.getenv("GITHUB_TOKEN")
         self.base_api = "https://api.github.com"
-        self.headers = {
+        self.headers: Dict[str, str] = {
             "Accept": "application/vnd.github+json",
-            "User-Agent": "CoineyScraper/1.0"
+            "User-Agent": "CoineyScraper/1.0",
         }
         if self.token:
             self.headers["Authorization"] = f"token {self.token}"
@@ -48,7 +77,8 @@ class GitHubCodeScraper:
                 await asyncio.sleep(max(sleep_time, 1))
                 return await self._get_json(url, params=params)
             r.raise_for_status()
-            return r.json()
+            data: Dict[str, Any] = r.json()
+            return data
 
     async def _get_text(self, url: str) -> str:
         async with httpx.AsyncClient(headers=self.headers, timeout=60.0) as client:
@@ -62,17 +92,25 @@ class GitHubCodeScraper:
             r.raise_for_status()
             return r.text
 
-    async def search_repos(self, query: str = "language:python", per_page: int = 10, pages: int = 1) -> List[Dict[str, Any]]:
+    async def search_repos(
+        self,
+        query: str = "language:python",
+        per_page: int = 10,
+        pages: int = 1,
+    ) -> List[Dict[str, Any]]:
         url = f"{self.base_api}/search/repositories"
         results: List[Dict[str, Any]] = []
         for page in range(1, pages + 1):
-            data = await self._get_json(url, params={
-                "q": query,
-                "sort": "stars",
-                "order": "desc",
-                "per_page": per_page,
-                "page": page
-            })
+            data = await self._get_json(
+                url,
+                params={
+                    "q": query,
+                    "sort": "stars",
+                    "order": "desc",
+                    "per_page": per_page,
+                    "page": page,
+                },
+            )
             for it in data.get("items", []):
                 results.append(it)
         return results
@@ -103,15 +141,27 @@ class GitHubCodeScraper:
             return text
         except Exception:
             try:
-                contents = await self._get_json(f"{self.base_api}/repos/{owner}/{repo}/contents/{path}", params={"ref": branch})
+                contents = await self._get_json(
+                    f"{self.base_api}/repos/{owner}/{repo}/contents/{path}",
+                    params={"ref": branch},
+                )
                 if contents and contents.get("encoding") == "base64":
-                    raw = base64.b64decode(contents["content"]).decode("utf-8", errors="replace")
+                    raw = base64.b64decode(contents["content"]).decode(
+                        "utf-8",
+                        errors="replace",
+                    )
                     return raw
                 return None
             except Exception:
                 return None
 
-    async def download_repo_code(self, owner: str, repo: str, dest_folder: Optional[str] = None, max_files: Optional[int] = None):
+    async def download_repo_code(
+        self,
+        owner: str,
+        repo: str,
+        dest_folder: Optional[str] = None,
+        max_files: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
         """
         Download files from repo that match extensions and are under max_file_size.
         Returns a list of metadata dicts for saved files.
@@ -123,11 +173,11 @@ class GitHubCodeScraper:
         if max_files:
             files = files[:max_files]
 
-        saved = []
+        saved: List[Dict[str, Any]] = []
         dest_root = Path(dest_folder or self.output_dir) / owner / repo
         dest_root.mkdir(parents=True, exist_ok=True)
 
-        async def worker(entry: Dict[str, Any]):
+        async def worker(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             async with self.semaphore:
                 path = entry["path"]
                 size = entry.get("size", 0)
@@ -144,7 +194,7 @@ class GitHubCodeScraper:
                     file_path.write_text(text, encoding="utf-8", errors="replace")
                 except Exception:
                     file_path.write_bytes(text.encode("utf-8", errors="replace"))
-                meta = {
+                meta: Dict[str, Any] = {
                     "repo": f"{owner}/{repo}",
                     "owner": owner,
                     "repo_name": repo,
@@ -152,7 +202,10 @@ class GitHubCodeScraper:
                     "size": len(text.encode("utf-8")),
                     "branch": branch,
                     "raw_url": f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}",
-                    "repo_meta": { "stars": repo_meta.get("stargazers_count"), "license": repo_meta.get("license",{}) }
+                    "repo_meta": {
+                        "stars": repo_meta.get("stargazers_count"),
+                        "license": repo_meta.get("license", {}),
+                    },
                 }
                 meta_path = file_path.with_suffix(file_path.suffix + ".json")
                 meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -169,14 +222,20 @@ class GitHubCodeScraper:
         logger.info(f"[GitHubCodeScraper] saved {len(saved)} files for {owner}/{repo}")
         return saved
 
-    async def repo_to_jsonl(self, owner: str, repo: str, jsonl_path: Optional[str] = None, max_files: Optional[int] = None):
+    async def repo_to_jsonl(
+        self,
+        owner: str,
+        repo: str,
+        jsonl_path: Optional[str] = None,
+        max_files: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
         """
         Downloads and writes code entries to JSONL at jsonl_path.
         """
-        jsonl_path = Path(jsonl_path or (self.output_dir / "code_dataset.jsonl"))
+        path_obj = Path(jsonl_path) if jsonl_path else (self.output_dir / "code_dataset.jsonl")
         saved = await self.download_repo_code(owner, repo, max_files=max_files)
         async with asyncio.Lock():
-            with open(jsonl_path, "a", encoding="utf-8") as f:
+            with open(path_obj, "a", encoding="utf-8") as f:
                 for entry in saved:
                     out = {
                         "repo": entry["meta"]["repo"],
@@ -184,7 +243,7 @@ class GitHubCodeScraper:
                         "branch": entry["meta"]["branch"],
                         "size": entry["meta"]["size"],
                         "raw_url": entry["meta"]["raw_url"],
-                        "text": entry["text"]
+                        "text": entry["text"],
                     }
                     f.write(json.dumps(out, ensure_ascii=False) + "\n")
         return saved

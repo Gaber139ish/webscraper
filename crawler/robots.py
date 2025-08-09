@@ -9,6 +9,7 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
 class RobotsCache:
     def __init__(self, user_agent: Optional[str] = None, cache_file: Optional[str] = "exports/robots_cache.json"):
         self.user_agent = user_agent or "*"
@@ -35,11 +36,8 @@ class RobotsCache:
         if not self.cache_path:
             return
         try:
-            out = {}
-            for host, rp in self._host_to_parser.items():
-                # robotparser doesn't expose lines; we store the sitemaps via read() if needed, fallback empty
-                # We cannot retrieve original lines, so skip persisting for now unless freshly fetched
-                pass
+            # robotparser doesn't expose lines; we store raw lines only when freshly fetched in _fetch_and_build
+            pass
         except Exception:
             pass
 
@@ -56,7 +54,6 @@ class RobotsCache:
                 else:
                     lines = r.text.splitlines()
                     rp.parse(lines)
-            # store in-memory, and opportunistically persist raw lines
             if self.cache_path:
                 try:
                     existing = {}

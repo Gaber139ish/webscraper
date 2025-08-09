@@ -3,16 +3,24 @@ from typing import List, Optional
 import aiosqlite
 import json
 
+
 app = FastAPI(title="Coiney Scraper API")
 
 DB_PATH = "./exports/dataset.db"
+
 
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
+
 @app.get("/pages", response_model=List[dict])
-async def list_pages(domain: Optional[str] = None, q: Optional[str] = Query(None, description="Search in title or text"), limit: int = 50, offset: int = 0):
+async def list_pages(
+    domain: Optional[str] = None,
+    q: Optional[str] = Query(None, description="Search in title or text"),
+    limit: int = 50,
+    offset: int = 0,
+):
     where = []
     params: List[object] = []
     if domain:

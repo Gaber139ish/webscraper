@@ -1,6 +1,7 @@
 from playwright.async_api import async_playwright
 from typing import Optional, Dict, Any
 
+
 class BrowserDriver:
     def __init__(self, user_agent: Optional[str] = None, headless: bool = True, proxy: Optional[Dict[str, Any]] = None):
         self.user_agent = user_agent
