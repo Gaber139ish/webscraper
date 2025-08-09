@@ -9,6 +9,7 @@ headless: true
 output:
   jsonl: "./exports/dataset.jsonl"
   sqlite: "./exports/dataset.db"
+  snapshots_dir: "./exports/snapshots"
 crawl:
   follow_external: false
   respect_robots: true
@@ -16,8 +17,15 @@ crawl:
   intercept_api: true
   max_retries: 2
   backoff_base: 0.75
+  allow_domains: []
+  deny_domains: []
+  deny_extensions: [".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico", ".pdf", ".zip", ".gz", ".tar", ".rar", ".7z", ".mp3", ".mp4"]
+  save_html_snapshot: false
+  save_screenshot: false
 rate_limit:
   delay_seconds: 0.5
+  per_domain_delay_seconds: 0.0
+  per_domain_concurrency: 0
 github:
   token: ""                # optional, recommended for higher rate limits
   query: "language:python machine learning"

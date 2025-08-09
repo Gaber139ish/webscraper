@@ -8,6 +8,7 @@ from parser.html_parser import parse_html
 from pipeline.cleaner import normalize_parsed
 from crawler.robots import RobotsCache
 from utils.logger import get_logger
+from pathlib import Path
 
 logger = get_logger(__name__)
 
@@ -26,7 +27,54 @@ async def run_crawl(cfg: Dict[str, Any], json_writer, sqlite_store) -> None:
     robots = RobotsCache(user_agent=cfg.get("user_agent")) if cfg.get("crawl", {}).get("respect_robots", False) else None
 
     headless: bool = bool(cfg.get("headless", True))
-    proxy = cfg.get("proxy")  # expects dict like {"server": "http://host:port", "username": "", "password": ""}
+    proxy = cfg.get("proxy")
+
+    allow_domains = set(cfg.get("crawl", {}).get("allow_domains", []) or [])
+    deny_domains = set(cfg.get("crawl", {}).get("deny_domains", []) or [])
+    deny_extensions = set(cfg.get("crawl", {}).get("deny_extensions", [
+        ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico",
+        ".pdf", ".zip", ".gz", ".tar", ".rar", ".7z", ".mp3", ".mp4"
+    ]))
+
+    per_domain_delay = float(cfg.get("rate_limit", {}).get("per_domain_delay_seconds", 0))
+    per_domain_concurrency = int(cfg.get("rate_limit", {}).get("per_domain_concurrency", 0))
+
+    domain_semaphores: Dict[str, asyncio.Semaphore] = {}
+    domain_last_access: Dict[str, float] = {}
+    domain_lock = asyncio.Lock()
+
+    snapshots_dir = Path(cfg.get("output", {}).get("snapshots_dir", "exports/snapshots"))
+    save_html = bool(cfg.get("crawl", {}).get("save_html_snapshot", False))
+    save_screenshot = bool(cfg.get("crawl", {}).get("save_screenshot", False))
+    if save_html or save_screenshot:
+        snapshots_dir.mkdir(parents=True, exist_ok=True)
+
+    async def acquire_domain_slot(domain: str):
+        if per_domain_concurrency > 0:
+            async with domain_lock:
+                if domain not in domain_semaphores:
+                    domain_semaphores[domain] = asyncio.Semaphore(per_domain_concurrency)
+            sem = domain_semaphores[domain]
+        else:
+            sem = None
+
+        if sem:
+            await sem.acquire()
+        # rate limit
+        if per_domain_delay > 0:
+            now = time.time()
+            async with domain_lock:
+                last = domain_last_access.get(domain)
+                if last is not None:
+                    wait = per_domain_delay - (now - last)
+                    if wait > 0:
+                        await asyncio.sleep(wait)
+                domain_last_access[domain] = time.time()
+        return sem
+
+    def release_domain_slot(domain: str, sem: Optional[asyncio.Semaphore]):
+        if sem:
+            sem.release()
 
     async with BrowserDriver(user_agent=cfg.get("user_agent"), headless=headless, proxy=proxy) as drv:
         async def worker(name: str) -> None:
@@ -53,8 +101,29 @@ async def run_crawl(cfg: Dict[str, Any], json_writer, sqlite_store) -> None:
                     if (url in visited) or (depth is not None and depth > cfg.get("max_depth", 2)):
                         queue.task_done()
                         continue
+
+                    # domain filters
+                    parsed_url = urlparse(url)
+                    dom = parsed_url.netloc
+                    if allow_domains and dom not in allow_domains:
+                        queue.task_done();
+                        continue
+                    if dom in deny_domains:
+                        queue.task_done();
+                        continue
+                    # extension filter
+                    for ext in deny_extensions:
+                        if parsed_url.path.lower().endswith(ext):
+                            queue.task_done();
+                            break
+                    else:
+                        pass
+                    if queue._unfinished_tasks and parsed_url.path.lower().endswith(tuple(deny_extensions)):
+                        continue
+
                     visited.add(url)
 
+                    domain_sem = await acquire_domain_slot(dom)
                     try:
                         logger.info(f"[{name}] Visiting {url} (depth={depth})")
                         attempt = 0
@@ -86,6 +155,17 @@ async def run_crawl(cfg: Dict[str, Any], json_writer, sqlite_store) -> None:
                         await json_writer.write(parsed)
                         await sqlite_store.insert(parsed)
 
+                        # optional snapshots
+                        ts = parsed['scrape_meta']["timestamp"]
+                        base_name = f"{parsed_url.netloc}_{ts}"
+                        if save_html:
+                            (snapshots_dir / f"{base_name}.html").write_text(html, encoding="utf-8")
+                        if save_screenshot:
+                            try:
+                                await page.screenshot(path=str(snapshots_dir / f"{base_name}.png"), full_page=True)
+                            except Exception as ss_err:
+                                logger.debug(f"screenshot failed: {ss_err}")
+
                         for link in parsed.get("links", []):
                             normalized = normalize_url(link, url)
                             if normalized and should_follow(normalized, cfg, url, robots):
@@ -96,6 +176,7 @@ async def run_crawl(cfg: Dict[str, Any], json_writer, sqlite_store) -> None:
                     except Exception as e:
                         logger.error(f"[{name}] crawl error for {url}: {e}")
                     finally:
+                        release_domain_slot(dom, domain_sem)
                         queue.task_done()
             finally:
                 await ctx.close()
@@ -122,6 +203,14 @@ def should_follow(url: str, cfg: Dict[str, Any], base_url: str, robots: Optional
         base_dom = urlparse(base_url).netloc
         if urlparse(url).netloc != base_dom:
             return False
+    # allow/deny domain filters
+    allow_domains = set(cfg.get("crawl", {}).get("allow_domains", []) or [])
+    deny_domains = set(cfg.get("crawl", {}).get("deny_domains", []) or [])
+    dom = urlparse(url).netloc
+    if allow_domains and dom not in allow_domains:
+        return False
+    if dom in deny_domains:
+        return False
     if robots is not None:
         try:
             if not robots.is_allowed(url):
