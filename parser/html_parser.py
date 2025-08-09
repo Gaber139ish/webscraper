@@ -1,10 +1,12 @@
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 
+
 def text_only(soup):
     for script in soup(["script", "style", "noscript", "iframe"]):
         script.extract()
     return soup.get_text(separator="\n", strip=True)
+
 
 def parse_html(url, html):
     soup = BeautifulSoup(html, "lxml")
@@ -20,7 +22,6 @@ def parse_html(url, html):
             meta[m.get("name")] = m.get("content")
         elif m.get("property"):
             meta[m.get("property")] = m.get("content")
-    # simple content classification
     domain = urlparse(url).netloc
     return {
         "url": url,
@@ -28,5 +29,5 @@ def parse_html(url, html):
         "title": title,
         "text": body_text,
         "links": links,
-        "meta": meta
+        "meta": meta,
     }

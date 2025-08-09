@@ -6,3 +6,8 @@ aiofiles
 aiosqlite
 PyYAML
 pandas
+pytest
+fastapi
+uvicorn
+mypy
+flake8

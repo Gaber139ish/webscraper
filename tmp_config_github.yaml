@@ -1,0 +1,25 @@
+start_urls: []
+max_depth: 1
+concurrency: 2
+user_agent: "CoineyScraper/1.0"
+headless: true
+output:
+  jsonl: "./exports/dataset.jsonl"
+  sqlite: "./exports/dataset.db"
+crawl:
+  follow_external: false
+  respect_robots: true
+  wait_after_load: 0.5
+  intercept_api: true
+rate_limit:
+  delay_seconds: 0.1
+github:
+  token: ""
+  query: "language:python requests"
+  per_page: 1
+  pages: 1
+  max_files_per_repo: 3
+  extensions: [".py"]
+  max_file_size: 50000
+  concurrency: 2
+  output_dir: "exports/github_code"

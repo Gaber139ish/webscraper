@@ -2,6 +2,7 @@ import json
 import aiofiles
 import asyncio
 
+
 class JSONLWriter:
     def __init__(self, path):
         self.path = path

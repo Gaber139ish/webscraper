@@ -1,5 +1,9 @@
-import json
 from playwright.async_api import Page
+from utils.logger import get_logger
+
+
+logger = get_logger(__name__)
+
 
 def is_api_request(request):
     rtype = request.resource_type
@@ -9,6 +13,7 @@ def is_api_request(request):
     if "/api/" in url or url.endswith(".json") or "graphql" in url:
         return True
     return False
+
 
 async def attach_sniffer(page: Page, on_api):
     # on_api: coroutine func taking (req, resp_body_opt)
@@ -26,9 +31,9 @@ async def attach_sniffer(page: Page, on_api):
                     "method": req.method,
                     "headers": dict(req.headers),
                     "status": response.status,
-                    "response_text": text
+                    "response_text": text,
                 })
         except Exception as e:
-            print("sniffer error:", e)
+            logger.debug(f"sniffer error: {e}")
 
     page.on("response", handle_response)

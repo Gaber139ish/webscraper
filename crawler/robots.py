@@ -1,14 +1,45 @@
 import asyncio
 import httpx
+import json
 from typing import Optional, Dict
 from urllib.parse import urlparse, urljoin
 from urllib import robotparser
+from pathlib import Path
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class RobotsCache:
-    def __init__(self, user_agent: Optional[str] = None):
+    def __init__(self, user_agent: Optional[str] = None, cache_file: Optional[str] = "exports/robots_cache.json"):
         self.user_agent = user_agent or "*"
         self._host_to_parser: Dict[str, robotparser.RobotFileParser] = {}
         self._lock = asyncio.Lock()
+        self.cache_path = Path(cache_file) if cache_file else None
+        if self.cache_path:
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            self._load_cache_from_disk()
+
+    def _load_cache_from_disk(self) -> None:
+        if not self.cache_path or not self.cache_path.exists():
+            return
+        try:
+            data = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            for host, lines in data.items():
+                rp = robotparser.RobotFileParser()
+                rp.parse(lines)
+                self._host_to_parser[host] = rp
+        except Exception as e:
+            logger.warning(f"Failed to load robots cache: {e}")
+
+    def _persist_cache(self) -> None:
+        if not self.cache_path:
+            return
+        try:
+            # robotparser doesn't expose lines; we store raw lines only when freshly fetched in _fetch_and_build
+            pass
+        except Exception:
+            pass
 
     async def _fetch_and_build(self, base_url: str) -> robotparser.RobotFileParser:
         parsed = urlparse(base_url)
@@ -18,10 +49,20 @@ class RobotsCache:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 r = await client.get(robots_url)
                 if r.status_code >= 400:
-                    # treat missing/denied as allow by default
                     rp.parse([])
+                    lines = []
                 else:
-                    rp.parse(r.text.splitlines())
+                    lines = r.text.splitlines()
+                    rp.parse(lines)
+            if self.cache_path:
+                try:
+                    existing = {}
+                    if self.cache_path.exists():
+                        existing = json.loads(self.cache_path.read_text(encoding="utf-8"))
+                    existing[parsed.netloc] = lines
+                    self.cache_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception as e:
+                    logger.debug(f"Failed to persist robots cache: {e}")
         except Exception:
             rp.parse([])
         return rp
@@ -36,10 +77,8 @@ class RobotsCache:
             return rp
 
     def is_allowed(self, url: str) -> bool:
-        # fire-and-forget populate; fallback allow until loaded
         parser = self._host_to_parser.get(urlparse(url).netloc)
         if parser is None:
-            # Kick off background populate without blocking
             asyncio.create_task(self._get_parser(url))
             return True
         return parser.can_fetch(self.user_agent, url)

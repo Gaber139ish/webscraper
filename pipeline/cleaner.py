@@ -1,5 +1,6 @@
 import re
 
+
 def clean_text(text):
     if not text:
         return ""
@@ -8,6 +9,7 @@ def clean_text(text):
     # remove long gibberish control chars
     t = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F]+', ' ', t)
     return t.strip()
+
 
 def normalize_parsed(parsed):
     parsed["text"] = clean_text(parsed.get("text", ""))
