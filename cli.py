@@ -3,15 +3,18 @@ import yaml
 import os
 import argparse
 from pathlib import Path
+from typing import Any, Dict
 
 from crawler.frontend_scraper import run_crawl
 from storage.json_saver import JSONLWriter
 from storage.sqlite_db import SQLiteStore
 from crawler.github_code_scraper import GitHubCodeScraper
+from utils.logger import get_logger
 
 CONFIG_PATH = "config.yaml"
+logger = get_logger(__name__)
 
-async def run_github_mode(cfg, json_writer, sqlite_store):
+async def run_github_mode(cfg: Dict[str, Any], json_writer: JSONLWriter, sqlite_store: SQLiteStore):
     gh_cfg = cfg.get("github") or {}
     if not gh_cfg:
         return
@@ -32,7 +35,7 @@ async def run_github_mode(cfg, json_writer, sqlite_store):
     for repo in repos:
         owner = repo["owner"]["login"]
         name = repo["name"]
-        print(f"Processing {owner}/{name}")
+        logger.info(f"Processing {owner}/{name}")
         saved = await gh_scraper.repo_to_jsonl(owner, name, jsonl_path=cfg["output"]["jsonl"], max_files=gh_cfg.get("max_files_per_repo"))
         await sqlite_store.insert({
             "url": repo["html_url"],
