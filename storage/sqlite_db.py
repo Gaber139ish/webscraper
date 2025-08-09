@@ -18,7 +18,8 @@ class SQLiteStore:
             meta TEXT,
             scrape_meta TEXT
         )
-        """)
+        """
+        )
         # Add a helpful index for domain queries
         await self.db.execute("""
         CREATE INDEX IF NOT EXISTS idx_pages_domain ON pages(domain)
@@ -27,17 +28,26 @@ class SQLiteStore:
 
     async def insert(self, parsed):
         try:
-            await self.db.execute("""
-                INSERT OR IGNORE INTO pages (url, domain, title, text, meta, scrape_meta)
+            await self.db.execute(
+                """
+                INSERT INTO pages (url, domain, title, text, meta, scrape_meta)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                parsed.get("url"),
-                parsed.get("domain"),
-                parsed.get("title"),
-                parsed.get("text"),
-                json.dumps(parsed.get("meta") or {}),
-                json.dumps(parsed.get("scrape_meta") or {})
-            ))
+                ON CONFLICT(url) DO UPDATE SET
+                  domain=excluded.domain,
+                  title=excluded.title,
+                  text=excluded.text,
+                  meta=excluded.meta,
+                  scrape_meta=excluded.scrape_meta
+                """,
+                (
+                    parsed.get("url"),
+                    parsed.get("domain"),
+                    parsed.get("title"),
+                    parsed.get("text"),
+                    json.dumps(parsed.get("meta") or {}),
+                    json.dumps(parsed.get("scrape_meta") or {}),
+                ),
+            )
             await self.db.commit()
         except Exception as e:
             print("sqlite insert error:", e)
@@ -50,6 +60,20 @@ class SQLiteStore:
         except Exception as e:
             print("sqlite has_url error:", e)
             return False
+
+    async def get_scrape_meta(self, url: str):
+        try:
+            async with self.db.execute("SELECT scrape_meta FROM pages WHERE url = ? LIMIT 1", (url,)) as cursor:
+                row = await cursor.fetchone()
+                if row and row[0]:
+                    try:
+                        return json.loads(row[0])
+                    except Exception:
+                        return {}
+                return {}
+        except Exception as e:
+            print("sqlite get_scrape_meta error:", e)
+            return {}
 
     async def close(self):
         if self.db is not None:

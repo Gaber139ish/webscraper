@@ -41,6 +41,28 @@ async def run_crawl(cfg, json_writer, sqlite_store):
         proxies=cfg.get("proxies", {}).get("httpx")
     ) if cfg.get("crawl", {}).get("respect_robots", False) else None
 
+    allow_list = cfg.get("allow_list") or []
+    deny_list = cfg.get("deny_list") or []
+
+    def allowed_by_lists(url: str) -> bool:
+        import re
+        if deny_list:
+            for pat in deny_list:
+                try:
+                    if re.search(pat, url):
+                        return False
+                except re.error:
+                    pass
+        if allow_list:
+            for pat in allow_list:
+                try:
+                    if re.search(pat, url):
+                        return True
+                except re.error:
+                    pass
+            return False
+        return True
+
     async def get_next_proxy():
         if not proxy_list:
             return None
@@ -82,7 +104,7 @@ async def run_crawl(cfg, json_writer, sqlite_store):
                         queue.task_done()
                         break
 
-                    if (url in visited_mem) or (depth > cfg.get("max_depth", 2)):
+                    if (url in visited_mem) or (depth > cfg.get("max_depth", 2)) or (not allowed_by_lists(url)):
                         PAGES_SKIPPED.inc()
                         queue.task_done()
                         continue
@@ -97,18 +119,35 @@ async def run_crawl(cfg, json_writer, sqlite_store):
 
                     try:
                         await rate_limiter.wait_for_slot(url)
-                        # robots crawl-delay augmentation
                         if robots is not None:
                             delay = robots.crawl_delay(url)
                             if delay:
                                 await asyncio.sleep(float(delay))
-                        # request
+                        # conditional request with ETag/Last-Modified
+                        cond = {}
+                        prev = await sqlite_store.get_scrape_meta(url)
+                        if prev:
+                            etag = prev.get("etag")
+                            last_mod = prev.get("last_modified")
+                            if etag:
+                                cond["If-None-Match"] = etag
+                            if last_mod:
+                                cond["If-Modified-Since"] = last_mod
+                        if cond:
+                            try:
+                                await page.set_extra_http_headers(cond)
+                            except Exception:
+                                pass
                         resp = await page.goto(url, wait_until="networkidle")
+                        if resp and resp.status == 304:
+                            # not modified, skip heavy parse
+                            PAGES_SKIPPED.inc()
+                            queue.task_done()
+                            continue
                         await asyncio.sleep(cfg.get("crawl", {}).get("wait_after_load", 1.0))
                         html = await page.content()
                         parsed = parse_html(url, html)
 
-                        # headers for ETag/Last-Modified if available
                         try:
                             headers = dict(resp.headers) if resp else {}
                         except Exception:

@@ -7,6 +7,7 @@ from typing import Iterable, List, Dict
 from pipeline.cleaner import clean_text
 from pipeline.lang_filter import keep_text_by_language
 from pipeline.simhash_dedupe import dedupe_simhash
+from pipeline.pii import redact
 
 # Optional heavy deps guarded
 try:
@@ -144,6 +145,7 @@ def build_web_dataset(cfg: dict):
         if obj.get("repo") and obj.get("raw_url"):
             continue
         text = clean_text(obj.get("text", ""))
+        text = redact(text)
         if len(text) < min_len:
             continue
         if not keep_text_by_language(text, allowed_langs):
