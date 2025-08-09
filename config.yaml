@@ -26,6 +26,23 @@ rate_limit:
   delay_seconds: 0.5
   per_domain_delay_seconds: 0.0
   per_domain_concurrency: 0
+deep_crawl:
+  infinite_scroll:
+    enabled: false
+    max_iterations: 8
+    wait_seconds: 0.8
+  click_more_selectors: []  # e.g. ["button.load-more", ".pagination .next a"]
+  max_clicks: 10
+  click_wait_seconds: 0.8
+  forms: []
+  # Example form:
+  # - url: "https://example.com/search"
+  #   queries: ["ai", "python"]
+  #   # or: queries_file: "queries.txt"
+  #   fields: {"input[name=q]": "{query}"}
+  #   submit_selector: "form button[type=submit]"
+  #   wait_after_submit: 1.5
+  #   max_results_per_query: 20
 github:
   token: ""                # optional, recommended for higher rate limits
   query: "language:python machine learning"

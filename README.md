@@ -34,11 +34,21 @@ Configuration (`config.yaml`):
 - **rate_limit.delay_seconds**: global delay between page visits per worker
 - **rate_limit.per_domain_delay_seconds**: delay per domain
 - **rate_limit.per_domain_concurrency**: concurrent requests per domain
+- **deep_crawl.infinite_scroll**: auto-scroll pages to load content
+- **deep_crawl.click_more_selectors**: CSS selectors to click “load more” buttons
+- **deep_crawl.max_clicks / deep_crawl.click_wait_seconds**: click behavior tuning
+- **deep_crawl.forms**: form seeding rules to explore behind search boxes
 - **github**: GitHub code scraping options. Alternatively set `GITHUB_TOKEN` env var.
+
+Deep web crawling:
+
+- Enable infinite scroll: set `deep_crawl.infinite_scroll.enabled: true` and tune iterations/wait.
+- Click “load more” buttons: add CSS selectors to `deep_crawl.click_more_selectors`.
+- Form seeding: configure entries under `deep_crawl.forms` with `url`, `fields`, `queries` (or `queries_file`), and `submit_selector`. Captured links from results pages will be queued.
+- Always ensure you comply with site terms and applicable laws. Use `respect_robots: true` and domain allow/deny lists.
 
 API server:
 
-- A small HTTP API is provided to query content in SQLite.
 - Run: `uvicorn api.server:app --reload --port 8000`
 - Endpoints:
   - `GET /health`
