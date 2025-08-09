@@ -18,5 +18,11 @@ Notes:
 - New:
   - Proxy & UA rotation via `proxies.playwright`, `proxies.httpx`, and `user_agents`.
   - Per-domain rate limiting via `rate_limit.per_domain_delays`.
-  - Robots.txt respect toggle: `crawl.respect_robots`.
-  - Auto dataset builder outputs to `exports/datasets/{web_text,code_text}/{train,valid}.jsonl`.
+  - Robots.txt respect toggle: `crawl.respect_robots` and crawl-delay support.
+  - Trafilatura-based extraction with BS fallback.
+  - Seeding via sitemaps/RSS: `--seed-sitemaps` and `--seed-rss <feeds...>`.
+  - Datasets: language filtering, MinHash + optional SimHash dedup, token chunking, JSONL + Parquet outputs.
+  - Code datasets: SPDX license detection (file headers) + repo-aware splits.
+  - Metrics: Prometheus exporter (`--metrics-port 9464`).
+  - Observability: `observability/docker-compose.yml` to run Prometheus (9090) + Grafana (3000) scraping `host.docker.internal:9464`.
+  - Analytics: `analytics/duckdb_report.py` summarizes Parquet datasets.

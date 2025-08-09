@@ -6,6 +6,7 @@ from typing import Iterable, List, Dict
 
 from pipeline.cleaner import clean_text
 from pipeline.lang_filter import keep_text_by_language
+from pipeline.simhash_dedupe import dedupe_simhash
 
 # Optional heavy deps guarded
 try:
@@ -53,7 +54,6 @@ def _write_jsonl(path: Path, rows: Iterable[dict]):
 def _write_parquet(path: Path, rows: List[dict]):
     if not rows or pa is None or pq is None:
         return
-    # Normalize schema: text (str), meta (str JSON)
     table = pa.table({
         "text": pa.array([r.get("text", "") for r in rows], pa.string()),
         "meta": pa.array([json.dumps(r.get("meta", {}), ensure_ascii=False) for r in rows], pa.string()),
@@ -78,14 +78,14 @@ Auto-generated dataset for AI training.
 """.strip()
 
 
-def _minhash(text: str, num_perm: int = 64) -> MinHash:
+def _minhash(text: str, num_perm: int = 64):
     mh = MinHash(num_perm=num_perm)
     for token in set(text.split()):
         mh.update(token.encode("utf-8"))
     return mh
 
 
-def _dedup(rows: List[dict], threshold: float = 0.9) -> List[dict]:
+def _dedup_lsh(rows: List[dict], threshold: float = 0.9) -> List[dict]:
     if MinHash is None or MinHashLSH is None:
         return rows
     lsh = MinHashLSH(threshold=threshold, num_perm=64)
@@ -105,7 +105,6 @@ def _dedup(rows: List[dict], threshold: float = 0.9) -> List[dict]:
 
 def _chunk_text(text: str, max_tokens: int = 600, model: str = "gpt2") -> List[str]:
     if tiktoken is None:
-        # naive fallback by words
         words = text.split()
         chunks = []
         for i in range(0, len(words), max_tokens):
@@ -120,6 +119,14 @@ def _chunk_text(text: str, max_tokens: int = 600, model: str = "gpt2") -> List[s
     return chunks
 
 
+def _detect_spdx(text: str) -> str:
+    # Very lightweight SPDX tag detection in headers
+    # SPDX-License-Identifier: MIT
+    import re
+    m = re.search(r"SPDX-License-Identifier:\s*([A-Za-z0-9+.-]+)", text)
+    return (m.group(1).lower() if m else "")
+
+
 def build_web_dataset(cfg: dict):
     src_jsonl = Path(cfg["output"]["jsonl"])  # unified crawl/code jsonl
     ds_cfg = cfg.get("datasets", {})
@@ -128,11 +135,13 @@ def build_web_dataset(cfg: dict):
     min_len = int(ds_cfg.get("min_text_length", 200))
     allowed_langs = ds_cfg.get("languages_allowed")
     chunk_tokens = int(ds_cfg.get("chunk_tokens", 0))
+    use_simhash = bool(ds_cfg.get("use_simhash", False))
+    simhash_bits = int(ds_cfg.get("simhash_bits", 64))
+    simhash_hamming = int(ds_cfg.get("simhash_hamming_threshold", 3))
 
     rows = []
     for obj in _iter_jsonl(src_jsonl) or []:
         if obj.get("repo") and obj.get("raw_url"):
-            # skip code entries here
             continue
         text = clean_text(obj.get("text", ""))
         if len(text) < min_len:
@@ -150,7 +159,11 @@ def build_web_dataset(cfg: dict):
                 "meta": {"url": obj.get("url"), "domain": obj.get("domain"), "title": obj.get("title")}
             })
 
-    rows = _dedup(rows)
+    # Dedup: MinHash LSH first, then optional SimHash
+    rows = _dedup_lsh(rows)
+    if use_simhash:
+        rows = dedupe_simhash(rows, f=simhash_bits, threshold=simhash_hamming)
+
     random.Random(RANDOM_SEED).shuffle(rows)
     n_total = len(rows)
     n_val = max(1, int(n_total * val_ratio)) if n_total > 0 else 0
@@ -171,14 +184,19 @@ def build_code_dataset(cfg: dict):
     val_ratio = float(ds_cfg.get("val_ratio", 0.05))
     chunk_tokens = int(ds_cfg.get("chunk_tokens_code", 0))
     allowed_licenses = set(ds_cfg.get("licenses_allowed", ["mit", "apache-2.0", "bsd-3-clause", "bsd-2-clause", "mpl-2.0"]))
+    use_simhash = bool(ds_cfg.get("use_simhash", False))
+    simhash_bits = int(ds_cfg.get("simhash_bits", 64))
+    simhash_hamming = int(ds_cfg.get("simhash_hamming_threshold", 3))
 
-    rows: List[dict] = []
     repo_to_rows: Dict[str, List[dict]] = {}
 
     for obj in _iter_jsonl(src_jsonl) or []:
         if not ("raw_url" in obj and "path" in obj and "text" in obj):
             continue
+        # license detection order: obj.license/meta.license -> SPDX tag in code -> allow empty
         license_key = (obj.get("license") or obj.get("meta", {}).get("license") or "").lower()
+        if not license_key:
+            license_key = _detect_spdx(obj.get("text", ""))
         if license_key and license_key not in allowed_licenses:
             continue
         code = obj.get("text")
@@ -187,11 +205,10 @@ def build_code_dataset(cfg: dict):
         repo = obj.get("repo") or obj.get("meta", {}).get("repo") or ""
         if chunk_tokens and chunk_tokens > 0:
             for ch in _chunk_text(code, max_tokens=chunk_tokens):
-                repo_to_rows.setdefault(repo, []).append({"text": ch, "meta": {"repo": repo, "path": obj.get("path"), "raw_url": obj.get("raw_url")}})
+                repo_to_rows.setdefault(repo, []).append({"text": ch, "meta": {"repo": repo, "path": obj.get("path"), "raw_url": obj.get("raw_url"), "license": license_key}})
         else:
-            repo_to_rows.setdefault(repo, []).append({"text": code, "meta": {"repo": repo, "path": obj.get("path"), "raw_url": obj.get("raw_url")}})
+            repo_to_rows.setdefault(repo, []).append({"text": code, "meta": {"repo": repo, "path": obj.get("path"), "raw_url": obj.get("raw_url"), "license": license_key}})
 
-    # repo-aware split to prevent leakage
     repos = list(repo_to_rows.keys())
     random.Random(RANDOM_SEED).shuffle(repos)
     n_repos_val = max(1, int(len(repos) * val_ratio)) if repos else 0
@@ -201,8 +218,12 @@ def build_code_dataset(cfg: dict):
     for r, lst in repo_to_rows.items():
         (val if r in repos_val else train).extend(lst)
 
-    train = _dedup(train)
-    val = _dedup(val)
+    # Dedup
+    train = _dedup_lsh(train)
+    val = _dedup_lsh(val)
+    if use_simhash:
+        train = dedupe_simhash(train, f=simhash_bits, threshold=simhash_hamming)
+        val = dedupe_simhash(val, f=simhash_bits, threshold=simhash_hamming)
 
     _write_jsonl(out_dir / "train.jsonl", train)
     _write_jsonl(out_dir / "valid.jsonl", val)

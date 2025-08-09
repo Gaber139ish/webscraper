@@ -15,3 +15,4 @@ duckdb
 prometheus_client
 feedparser
 playwright-stealth
+simhash
